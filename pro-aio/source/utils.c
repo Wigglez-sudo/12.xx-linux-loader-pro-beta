@@ -70,7 +70,7 @@ int setup_env(void) {
 #elif defined(FW_1270_ONLY)
 #define PS5_BUILD_TAG "12.70 PRO only"
 #else
-#define PS5_BUILD_TAG "12.00 PRO"
+#define PS5_BUILD_TAG "12.00+12.40 PRO"
 #endif
 #endif
   notify("build: " PS5_BUILD_TAG);
@@ -107,9 +107,16 @@ int set_offsets(void) {
   case 0x1200:
     env_offset = off_1200;
     break;
+#elif defined(FW_1240_ONLY)
+  case 0x1240:
+    env_offset = off_1240;
+    break;
 #else
   case 0x1200:
     env_offset = off_1200;
+    break;
+  case 0x1240:
+    env_offset = off_1240;
     break;
 #endif
   default:
