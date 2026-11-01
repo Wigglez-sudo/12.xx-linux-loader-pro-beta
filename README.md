@@ -19,3 +19,5 @@ the console.
 
 Based on https://github.com/ps5-linux/ps5-linux-loader. The 12.xx Pro tables and
 the GPU firmware dump are the reason this fork exists. GPL-3.0.
+
+The built loaders are at https://github.com/Wigglez-sudo/12.xx-linux-loader.
