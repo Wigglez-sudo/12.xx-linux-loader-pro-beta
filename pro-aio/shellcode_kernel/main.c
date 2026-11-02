@@ -73,12 +73,12 @@ __attribute__((section(".entry_point"))) uint32_t main(uint64_t add1,
   }
   printf("Linux prepared OK\n");
 
-  printf("Good Bye VM :)\n");
+  printf("resume: vmexit complete\n");
   mark(args_ptr, "SCK>6-rendezvous-starting\n");
   smp_rendezvous(smp_no_rendevous_barrier, vmmcall_dummy,
                  smp_no_rendevous_barrier, NULL);
   mark(args_ptr, "SCK>7-rendezvous-RETURNED\n");
 
-  printf("We shouldn't be here :(\n");
+  printf("resume: unexpected state\n");
   return 0;
 }

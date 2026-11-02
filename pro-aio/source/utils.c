@@ -55,9 +55,6 @@ uint64_t derive_hv_base(void) {
 }
 
 int setup_env(void) {
-  notify("Welcome to ps5-linux-loader. We'll defeat HV and prepare the system "
-         "to boot Linux on sleep resume.\n");
-
 #ifndef PS5_BUILD_TAG
 #if defined(FW_1200_ONLY)
 #define PS5_BUILD_TAG "12.00 PRO only"

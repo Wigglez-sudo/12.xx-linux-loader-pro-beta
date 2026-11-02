@@ -48,7 +48,7 @@ int main(void) {
 
   notify("Finished preparation. Going to rest mode in 5 seconds.\nPlease wait "
          "for the orange light to stop "
-         "blinking and then wakeup to Linux :)\n");
+         "blinking, then wake the console to boot Linux.\n");
 
   sleep(5);
   enter_rest_mode();

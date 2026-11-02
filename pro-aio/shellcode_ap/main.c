@@ -45,7 +45,6 @@ void ap_main(u64 *p)
 
   u64 heap  = rd64(dmap + p[P_HEAPOFF_ADDR]);
   u64 pcpu0 = rd64(dmap + p[P_PCPUS_ADDR]);
-  u64 heap_addr = p[P_HEAPOFF_ADDR], pcpus_addr = p[P_PCPUS_ADDR];
 
   if (!heap || pcpu0 < heap || (pcpu0 - heap) < H || (pcpu0 - heap) >= H + hv_size) {
     u64 ha, pa_, ok = 0;
@@ -65,7 +64,6 @@ void ap_main(u64 *p)
         }
         if (seen >= 2 && good == seen) {
           heap = h2; pcpu0 = rd64(dmap + pa_);
-          heap_addr = ha; pcpus_addr = pa_;
           p[P_HEAPOFF_ADDR] = ha; p[P_PCPUS_ADDR] = pa_;
           ok = 1; break;
         }
