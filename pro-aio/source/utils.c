@@ -65,12 +65,14 @@ int setup_env(void) {
 #define PS5_BUILD_TAG "12.40 PRO only"
 #elif defined(FW_1202_ONLY)
 #define PS5_BUILD_TAG "12.02 PRO only"
+#elif defined(FW_1220_ONLY)
+#define PS5_BUILD_TAG "12.20 PRO only"
 #elif defined(FW_1260_ONLY)
 #define PS5_BUILD_TAG "12.60 PRO only"
 #elif defined(FW_1270_ONLY)
 #define PS5_BUILD_TAG "12.70 PRO only"
 #else
-#define PS5_BUILD_TAG "12.00+12.02+12.40+12.60+12.70 PRO"
+#define PS5_BUILD_TAG "12.00+12.02+12.20+12.40+12.60+12.70 PRO"
 #endif
 #endif
   notify("build: " PS5_BUILD_TAG);
@@ -92,7 +94,7 @@ int set_offsets(void) {
   fw = (kernel_get_fw_version() >> 0x10) & 0xFFFF;
   if (fw == 0)
     return -1;
-#if defined(FW_1200_ONLY) || defined(FW_1202_ONLY) || defined(FW_1240_ONLY) || defined(FW_1260_ONLY) || defined(FW_1270_ONLY)
+#if defined(FW_1200_ONLY) || defined(FW_1202_ONLY) || defined(FW_1220_ONLY) || defined(FW_1240_ONLY) || defined(FW_1260_ONLY) || defined(FW_1270_ONLY)
 
   {
     uint32_t soc = (uint32_t)sceKernelGetMainSocId();
@@ -115,6 +117,10 @@ int set_offsets(void) {
   case 0x1202:
     env_offset = off_1202;
     break;
+#elif defined(FW_1220_ONLY)
+  case 0x1220:
+    env_offset = off_1240;
+    break;
 #elif defined(FW_1260_ONLY)
   case 0x1260:
     env_offset = off_1270;
@@ -131,6 +137,9 @@ int set_offsets(void) {
     break;
   case 0x1202:
     env_offset = off_1202;
+    break;
+  case 0x1220:
+    env_offset = off_1240;
     break;
   case 0x1240:
     env_offset = off_1240;

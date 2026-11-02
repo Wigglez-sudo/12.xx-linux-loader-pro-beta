@@ -309,6 +309,8 @@ int hv_defeat_13xx(void *shellcode_kernel, size_t shellcode_kernel_len) {
   if (fw == 0x1200) {
 #elif defined(FW_1202_ONLY)
   if (fw == 0x1202) {
+#elif defined(FW_1220_ONLY)
+  if (fw == 0x1220) {
 #else
   if (fw == 0x1200 || fw == 0x1202 || fw == 0x1220 || fw == 0x1240 || fw == 0x1260 || fw == 0x1270) {
 #endif
@@ -324,6 +326,8 @@ int hv_defeat_13xx(void *shellcode_kernel, size_t shellcode_kernel_len) {
   if (!hv_base && fw == 0x1200) {
 #elif defined(FW_1202_ONLY)
   if (!hv_base && fw == 0x1202) {
+#elif defined(FW_1220_ONLY)
+  if (!hv_base && fw == 0x1220) {
 #else
   if (!hv_base && (fw == 0x1200 || fw == 0x1202 || fw == 0x1220 || fw == 0x1240 || fw == 0x1260 || fw == 0x1270)) {
 #endif
